@@ -4,32 +4,40 @@ import { SecureAPI } from '../lib/secureApi';
 interface RevenueData {
     property_id: string;
     total_revenue: number;
+    total_revenue_str?: string;
     currency: string;
     reservations_count: number;
 }
 
 interface RevenueSummaryProps {
     propertyId?: string;
+    month?: number;
+    year?: number;
     debugTenant?: string; 
     showRaw?: boolean;
 }
 
-export const RevenueSummary: React.FC<RevenueSummaryProps> = ({ propertyId = 'prop-001', debugTenant, showRaw }) => {
+export const RevenueSummary: React.FC<RevenueSummaryProps> = ({ propertyId = 'prop-001', month, year, debugTenant, showRaw }) => {
     const [data, setData] = useState<RevenueData | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
 
-    const activeTenant = debugTenant || 'candidate';
+    // Tenant is derived server-side from the auth token; only send a header when explicitly debugging.
+    const activeTenant = debugTenant;
 
     useEffect(() => {
         const fetchRevenue = async () => {
             setLoading(true);
+            setError('');
+            setData(null);
             try {
                 // Use SecureAPI to handle authentication automatically
                 // We pass the simulatedTenant option which SecureAPI will attach as a header
                 const response = await SecureAPI.getDashboardSummary(propertyId, {
                     simulatedTenant: activeTenant,
-                    timestamp: Date.now()
+                    timestamp: Date.now(),
+                    month,
+                    year
                 });
                 setData(response);
             } catch (err) {
@@ -41,7 +49,7 @@ export const RevenueSummary: React.FC<RevenueSummaryProps> = ({ propertyId = 'pr
         };
 
         fetchRevenue();
-    }, [propertyId, activeTenant]);
+    }, [propertyId, activeTenant, month, year]);
 
     if (loading) {
         return (
@@ -61,7 +69,8 @@ export const RevenueSummary: React.FC<RevenueSummaryProps> = ({ propertyId = 'pr
     if (error) return <div className="p-4 text-red-500 bg-red-50 rounded-lg">{error}</div>;
     if (!data) return null;
 
-    const displayTotal = Math.round(data.total_revenue * 100) / 100;
+    // Server returns an exact 2dp Decimal string; avoid float rounding (Math.round(x*100)/100 drifts by a cent).
+    const displayTotal = data.total_revenue_str !== undefined ? Number(data.total_revenue_str) : data.total_revenue;
 
     return (
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden hover:shadow-md transition-shadow duration-300">

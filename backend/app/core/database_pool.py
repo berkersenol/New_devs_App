@@ -1,6 +1,5 @@
 import asyncio
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from sqlalchemy.pool import QueuePool
 import logging
 from ..config import settings
 
@@ -15,11 +14,18 @@ class DatabasePool:
         """Initialize database connection pool"""
         try:
             # Create async engine with connection pooling
-            database_url = f"postgresql+asyncpg://{settings.supabase_db_user}:{settings.supabase_db_password}@{settings.supabase_db_host}:{settings.supabase_db_port}/{settings.supabase_db_name}"
-            
+            # Build the async URL from the configured DATABASE_URL.
+            # (Previously read non-existent settings.supabase_db_* fields, so init
+            # always failed and callers silently fell back to mock data.)
+            database_url = settings.database_url
+            if database_url.startswith("postgresql://"):
+                database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+            elif database_url.startswith("postgres://"):
+                database_url = database_url.replace("postgres://", "postgresql+asyncpg://", 1)
+
+            # Async engines must use the default AsyncAdaptedQueuePool, not QueuePool.
             self.engine = create_async_engine(
                 database_url,
-                poolclass=QueuePool,
                 pool_size=20,  # Number of connections to maintain
                 max_overflow=30,  # Additional connections when needed
                 pool_pre_ping=True,  # Validate connections
@@ -45,14 +51,24 @@ class DatabasePool:
         if self.engine:
             await self.engine.dispose()
     
-    async def get_session(self) -> AsyncSession:
-        """Get database session from pool"""
+    def get_session(self) -> AsyncSession:
+        """Get database session from pool (usable as `async with db_pool.get_session()`)"""
         if not self.session_factory:
             raise Exception("Database pool not initialized")
         return self.session_factory()
 
 # Global database pool instance
 db_pool = DatabasePool()
+_init_lock = asyncio.Lock()
+
+
+async def get_db_pool() -> DatabasePool:
+    """Return the shared pool, initializing it once (instead of a new engine per request)."""
+    if db_pool.session_factory is None:
+        async with _init_lock:
+            if db_pool.session_factory is None:
+                await db_pool.initialize()
+    return db_pool
 
 async def get_db_session() -> AsyncSession:
     """Dependency to get database session"""
